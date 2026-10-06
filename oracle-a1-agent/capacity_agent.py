@@ -33,7 +33,10 @@ OCPUS = 2
 MEMORY_GB = 12.0
 DISPLAY_NAME = "crypto-arbitrage-scanner"
 
-POLL_SECONDS = max(5, int(os.getenv("POLL_SECONDS", "15")))
+POLL_SECONDS = max(1, int(os.getenv("POLL_SECONDS", "1")))
+THROTTLE_BACKOFF_INITIAL = max(1, int(os.getenv("THROTTLE_BACKOFF_INITIAL", "2")))
+THROTTLE_BACKOFF_MAX = max(THROTTLE_BACKOFF_INITIAL, int(os.getenv("THROTTLE_BACKOFF_MAX", "60")))
+EXISTING_CHECK_INTERVAL = max(10, int(os.getenv("EXISTING_CHECK_INTERVAL", "30")))
 RUN_WINDOW_SECONDS = max(60, int(os.getenv("RUN_WINDOW_SECONDS", "20700")))  # 5h45m
 VERIFY_SECONDS = max(30, int(os.getenv("VERIFY_SECONDS", "180")))
 
@@ -204,21 +207,35 @@ def main() -> int:
     _ = get_network_client(config)
 
     deadline = time.time() + RUN_WINDOW_SECONDS
-    LOG.info("Starting Singapore A1 watcher. Poll=%ss.", POLL_SECONDS)
+    LOG.info("Starting Singapore A1 watcher. Normal poll=%ss; throttle backoff=%ss..%ss.", POLL_SECONDS, THROTTLE_BACKOFF_INITIAL, THROTTLE_BACKOFF_MAX)
+    last_existing_check = 0.0
+    backoff = THROTTLE_BACKOFF_INITIAL
 
     while time.time() < deadline:
         try:
+            now = time.time()
+            # Do not spend a second API call on every poll. Check for an existing VM
+            # periodically, and always re-check immediately before any launch.
+            if now - last_existing_check >= EXISTING_CHECK_INTERVAL:
+                existing = list_existing_instances(compute)
+                last_existing_check = now
+                if existing:
+                    LOG.info("Scanner VM already exists: %s. Stopping watcher.", existing[0].id)
+                    return 0
+
+            status = capacity_status(compute)
+            backoff = THROTTLE_BACKOFF_INITIAL
+            if status != "AVAILABLE":
+                time.sleep(POLL_SECONDS)
+                continue
+
+            LOG.warning("A1 capacity AVAILABLE. Re-checking existing instances before launch.")
             existing = list_existing_instances(compute)
             if existing:
                 LOG.info("Scanner VM already exists: %s. Stopping watcher.", existing[0].id)
                 return 0
 
-            status = capacity_status(compute)
-            if status != "AVAILABLE":
-                time.sleep(POLL_SECONDS)
-                continue
-
-            LOG.warning("A1 capacity AVAILABLE. Proceeding to deterministic safety-checked launch.")
+            LOG.warning("A1 capacity AVAILABLE and no scanner VM exists. Proceeding to deterministic safety-checked launch.")
             instance = launch_exact_instance(compute)
             ok = verify_instance(compute, instance.id)
             if not ok:
@@ -227,8 +244,14 @@ def main() -> int:
             return 0
 
         except oci.exceptions.ServiceError as exc:
-            LOG.warning("OCI API error %s: %s; retrying in %ss.", exc.status, exc.message, POLL_SECONDS)
-            time.sleep(POLL_SECONDS)
+            status = getattr(exc, "status", None)
+            if status == 429 or status in {409, 503}:
+                LOG.warning("OCI throttling/transient response %s: %s; backing off for %ss.", status, exc.message, backoff)
+                time.sleep(backoff)
+                backoff = min(backoff * 2, THROTTLE_BACKOFF_MAX)
+            else:
+                LOG.warning("OCI API error %s: %s; retrying in %ss.", status, exc.message, POLL_SECONDS)
+                time.sleep(POLL_SECONDS)
         except Exception as exc:
             LOG.exception("Agent error: %s", exc)
             # Ambiguous or unexpected conditions are fail-closed.
