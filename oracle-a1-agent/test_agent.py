@@ -4,6 +4,8 @@ from pathlib import Path
 MODULE_PATH = Path(__file__).with_name("capacity_agent.py")
 spec = importlib.util.spec_from_file_location("capacity_agent", MODULE_PATH)
 module = importlib.util.module_from_spec(spec)
+import sys
+sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
 
