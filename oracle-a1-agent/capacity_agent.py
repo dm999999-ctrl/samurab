@@ -42,6 +42,8 @@ THROTTLE_BACKOFF_MAX = max(THROTTLE_BACKOFF_INITIAL, int(os.getenv("THROTTLE_BAC
 EXISTING_CHECK_INTERVAL = max(10, int(os.getenv("EXISTING_CHECK_INTERVAL", "30")))
 RUN_WINDOW_SECONDS = max(60, int(os.getenv("RUN_WINDOW_SECONDS", "20700")))
 VERIFY_SECONDS = max(30, int(os.getenv("VERIFY_SECONDS", "180")))
+LAUNCH_RETRY_INITIAL = max(1, int(os.getenv("LAUNCH_RETRY_INITIAL", "2")))
+LAUNCH_RETRY_MAX = max(LAUNCH_RETRY_INITIAL, int(os.getenv("LAUNCH_RETRY_MAX", "60")))
 HISTORY_FILE = os.getenv("CAPACITY_HISTORY_FILE", "capacity-history.csv")
 
 
@@ -135,94 +137,31 @@ def capacity_status(compute: oci.core.ComputeClient, history_writer=None) -> str
 
 
 def list_existing_instances(compute: oci.core.ComputeClient) -> list[oci.core.models.Instance]:
+    """Return every non-terminated scanner VM, including provisioning states.
+
+    This intentionally does not filter lifecycle_state=RUNNING: after an
+    ambiguous launch response, a PROVISIONING/STARTING instance must block a
+    second launch.
+    """
     instances = []
     response = compute.list_instances(
         compartment_id=COMPARTMENT_ID,
         availability_domain=AVAILABILITY_DOMAIN,
-        lifecycle_state="RUNNING",
     )
     instances.extend(response.data)
     while response.has_next_page:
         response = compute.list_instances(
             compartment_id=COMPARTMENT_ID,
             availability_domain=AVAILABILITY_DOMAIN,
-            lifecycle_state="RUNNING",
             page=response.next_page,
         )
         instances.extend(response.data)
 
-    return [i for i in instances if (i.display_name or "").strip() == DISPLAY_NAME]
-
-
-def hard_safety_check() -> None:
-    checks = {
-        "region": REGION == "ap-singapore-1",
-        "availability_domain": AVAILABILITY_DOMAIN == "EmQk:AP-SINGAPORE-1-AD-1",
-        "shape": SHAPE == "VM.Standard.A1.Flex",
-        "ocpus": OCPUS == 2,
-        "memory_gb": MEMORY_GB == 12.0,
-        "display_name": DISPLAY_NAME == "crypto-arbitrage-scanner",
-    }
-    failed = [name for name, ok in checks.items() if not ok]
-    if failed:
-        raise RuntimeError(f"Hard safety check failed: {', '.join(failed)}")
-
-
-def launch_exact_instance(compute: oci.core.ComputeClient) -> oci.core.models.Instance:
-    hard_safety_check()
-    existing = list_existing_instances(compute)
-    if existing:
-        LOG.warning("Existing scanner VM already present (%s); will not create another.", existing[0].id)
-        return existing[0]
-
-    details = oci.core.models.LaunchInstanceDetails(
-        availability_domain=AVAILABILITY_DOMAIN,
-        compartment_id=COMPARTMENT_ID,
-        display_name=DISPLAY_NAME,
-        shape=SHAPE,
-        shape_config=oci.core.models.LaunchInstanceShapeConfigDetails(
-            ocpus=OCPUS,
-            memory_in_gbs=MEMORY_GB,
-        ),
-        source_details=oci.core.models.InstanceSourceViaImageDetails(
-            image_id=IMAGE_ID,
-            source_type="image",
-        ),
-        create_vnic_details=oci.core.models.CreateVnicDetails(
-            subnet_id=SUBNET_ID,
-            assign_public_ip=True,
-        ),
-    )
-    instance = compute.launch_instance(details).data
-    LOG.info("Launch submitted: %s", instance.id)
-    return instance
-
-
-def verify_instance(compute: oci.core.ComputeClient, instance_id: str) -> bool:
-    deadline = time.time() + VERIFY_SECONDS
-    while time.time() < deadline:
-        instance = compute.get_instance(instance_id).data
-        LOG.info("Instance %s lifecycle=%s shape=%s ocpus=%s memory=%s",
-                 instance.id, instance.lifecycle_state, instance.shape,
-                 getattr(instance.shape_config, "ocpus", None),
-                 getattr(instance.shape_config, "memory_in_gbs", None))
-
-        exact = (
-            instance.shape == SHAPE
-            and float(instance.shape_config.ocpus) == float(OCPUS)
-            and float(instance.shape_config.memory_in_gbs) == float(MEMORY_GB)
-            and instance.display_name == DISPLAY_NAME
-        )
-        if not exact:
-            raise RuntimeError("Launched instance failed exact target verification.")
-        if instance.lifecycle_state == "RUNNING":
-            return True
-        if instance.lifecycle_state in {"TERMINATED", "TERMINATING"}:
-            return False
-        time.sleep(10)
-    return False
-
-
+    return [
+        i for i in instances
+        if (i.display_name or "").strip() == DISPLAY_NAME
+        and getattr(i, "lifecycle_state", None) != "TERMINATED"
+    ]
 def main() -> int:
     logging.basicConfig(
         level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -236,9 +175,14 @@ def main() -> int:
     history_handle, history_writer = _history_writer()
     try:
         deadline = time.time() + RUN_WINDOW_SECONDS
-        LOG.info("Starting Singapore A1 watcher. Normal poll=%ss; throttle backoff=%ss..%ss.", POLL_SECONDS, THROTTLE_BACKOFF_INITIAL, THROTTLE_BACKOFF_MAX)
+        LOG.info(
+            "Starting Singapore A1 watcher. Normal poll=%ss; throttle backoff=%ss..%ss; launch retry=%ss..%ss.",
+            POLL_SECONDS, THROTTLE_BACKOFF_INITIAL, THROTTLE_BACKOFF_MAX,
+            LAUNCH_RETRY_INITIAL, LAUNCH_RETRY_MAX,
+        )
         last_existing_check = 0.0
         backoff = THROTTLE_BACKOFF_INITIAL
+        launch_backoff = LAUNCH_RETRY_INITIAL
 
         while time.time() < deadline:
             try:
@@ -247,8 +191,14 @@ def main() -> int:
                     existing = list_existing_instances(compute)
                     last_existing_check = now
                     if existing:
-                        LOG.info("Scanner VM already exists: %s. Stopping watcher.", existing[0].id)
-                        return 0
+                        LOG.info("Scanner VM already exists: %s (%s). Stopping watcher.",
+                                 existing[0].id, existing[0].lifecycle_state)
+                        if existing[0].lifecycle_state == "RUNNING":
+                            return 0
+                        if verify_instance(compute, existing[0].id):
+                            return 0
+                        LOG.warning("Existing scanner VM did not verify as RUNNING; fail closed.")
+                        return 2
 
                 status = capacity_status(compute, history_writer)
                 backoff = THROTTLE_BACKOFF_INITIAL
@@ -259,27 +209,131 @@ def main() -> int:
                 LOG.warning("A1 capacity AVAILABLE. Re-checking existing instances before launch.")
                 existing = list_existing_instances(compute)
                 if existing:
-                    LOG.info("Scanner VM already exists: %s. Stopping watcher.", existing[0].id)
+                    LOG.info("Scanner VM already exists: %s (%s). Stopping watcher.",
+                             existing[0].id, existing[0].lifecycle_state)
+                    if existing[0].lifecycle_state == "RUNNING":
+                        return 0
+                    return 0 if verify_instance(compute, existing[0].id) else 2
+
+                LOG.warning(
+                    "A1 capacity AVAILABLE and no scanner VM exists. "
+                    "Proceeding to deterministic safety-checked launch."
+                )
+
+                try:
+                    instance = launch_exact_instance(compute)
+                    launch_backoff = LAUNCH_RETRY_INITIAL
+                except oci.exceptions.ServiceError as exc:
+                    status_code = getattr(exc, "status", None)
+                    LOG.warning(
+                        "Launch API error %s: %s. Reconciling before any retry.",
+                        status_code, getattr(exc, "message", str(exc)),
+                    )
+                    existing = list_existing_instances(compute)
+                    if existing:
+                        LOG.warning(
+                            "Launch response was ambiguous but scanner VM %s exists in %s; "
+                            "will not submit another launch.",
+                            existing[0].id, existing[0].lifecycle_state,
+                        )
+                        return 0 if verify_instance(compute, existing[0].id) else 2
+
+                    if status_code in {429, 409, 503}:
+                        delay = min(launch_backoff, LAUNCH_RETRY_MAX)
+                    else:
+                        delay = min(launch_backoff, LAUNCH_RETRY_MAX)
+
+                    LOG.warning(
+                        "No scanner VM exists after launch failure. Re-checking capacity before retry in %ss.",
+                        delay,
+                    )
+                    time.sleep(delay)
+                    launch_backoff = min(launch_backoff * 2, LAUNCH_RETRY_MAX)
+                    continue
+                except Exception as exc:
+                    LOG.exception(
+                        "Unexpected launch failure: %s. Reconciling instance state before retry.",
+                        exc,
+                    )
+                    existing = list_existing_instances(compute)
+                    if existing:
+                        LOG.warning(
+                            "Scanner VM %s exists in %s after unexpected launch failure; "
+                            "will not submit another launch.",
+                            existing[0].id, existing[0].lifecycle_state,
+                        )
+                        return 0 if verify_instance(compute, existing[0].id) else 2
+
+                    # The request did not leave a discoverable scanner VM. Before
+                    # retrying, require capacity to be AVAILABLE again.
+                    retry_status = capacity_status(compute, history_writer)
+                    if retry_status != "AVAILABLE":
+                        LOG.warning(
+                            "Capacity is no longer AVAILABLE after launch failure (%s); "
+                            "returning to normal polling.",
+                            retry_status,
+                        )
+                        launch_backoff = LAUNCH_RETRY_INITIAL
+                        time.sleep(POLL_SECONDS)
+                        continue
+
+                    delay = min(launch_backoff, LAUNCH_RETRY_MAX)
+                    LOG.warning(
+                        "No scanner VM exists and capacity remains AVAILABLE; "
+                        "retrying launch in %ss.",
+                        delay,
+                    )
+                    time.sleep(delay)
+                    launch_backoff = min(launch_backoff * 2, LAUNCH_RETRY_MAX)
+                    continue
+
+                ok = verify_instance(compute, instance.id)
+                if ok:
+                    LOG.info("Scanner VM successfully verified. Watcher complete.")
                     return 0
 
-                LOG.warning("A1 capacity AVAILABLE and no scanner VM exists. Proceeding to deterministic safety-checked launch.")
-                instance = launch_exact_instance(compute)
-                ok = verify_instance(compute, instance.id)
-                if not ok:
-                    raise RuntimeError("Launch did not reach RUNNING state before verification deadline.")
-                LOG.info("Scanner VM successfully verified. Watcher complete.")
-                return 0
+                # Verification failure is also reconciled before any possible retry.
+                existing = list_existing_instances(compute)
+                if existing:
+                    LOG.warning(
+                        "Verification did not complete, but scanner VM %s still exists in %s; "
+                        "will not launch another instance.",
+                        existing[0].id, existing[0].lifecycle_state,
+                    )
+                    return 0 if existing[0].lifecycle_state != "TERMINATED" else 2
+
+                retry_status = capacity_status(compute, history_writer)
+                if retry_status == "AVAILABLE":
+                    delay = min(launch_backoff, LAUNCH_RETRY_MAX)
+                    LOG.warning(
+                        "Launched VM disappeared before verification and capacity remains AVAILABLE; "
+                        "retrying launch in %ss.",
+                        delay,
+                    )
+                    time.sleep(delay)
+                    launch_backoff = min(launch_backoff * 2, LAUNCH_RETRY_MAX)
+                    continue
+
+                LOG.warning("Verification failed and capacity is no longer AVAILABLE; returning to polling.")
+                launch_backoff = LAUNCH_RETRY_INITIAL
+                time.sleep(POLL_SECONDS)
 
             except oci.exceptions.ServiceError as exc:
                 status = getattr(exc, "status", None)
                 timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 _record_capacity(history_writer, timestamp, f"ERROR_{status}", None, None)
                 if status == 429 or status in {409, 503}:
-                    LOG.warning("OCI throttling/transient response %s: %s; backing off for %ss.", status, exc.message, backoff)
+                    LOG.warning(
+                        "OCI throttling/transient response %s: %s; backing off for %ss.",
+                        status, exc.message, backoff,
+                    )
                     time.sleep(backoff)
                     backoff = min(backoff * 2, THROTTLE_BACKOFF_MAX)
                 else:
-                    LOG.warning("OCI API error %s: %s; retrying in %ss.", status, exc.message, POLL_SECONDS)
+                    LOG.warning(
+                        "OCI API error %s: %s; retrying in %ss.",
+                        status, exc.message, POLL_SECONDS,
+                    )
                     time.sleep(POLL_SECONDS)
             except Exception as exc:
                 LOG.exception("Agent error: %s", exc)
@@ -290,6 +344,3 @@ def main() -> int:
     finally:
         history_handle.close()
 
-
-if __name__ == "__main__":
-    sys.exit(main())
