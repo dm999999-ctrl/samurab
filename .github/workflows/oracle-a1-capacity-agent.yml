@@ -46,3 +46,12 @@ jobs:
       - name: Run A1 capacity agent
         working-directory: oracle-a1-agent
         run: python capacity_agent.py
+
+      - name: Upload A1 capacity history
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: a1-capacity-history-${{ github.run_number }}
+          path: oracle-a1-agent/capacity-history.csv
+          if-no-files-found: warn
+          retention-days: 90
