@@ -29,8 +29,8 @@ SUBNET_ID = "ocid1.subnet.oc1.ap-singapore-1.aaaaaaaaesafpzvnjpdyjgjjge23c4vteqm
 IMAGE_ID = "ocid1.image.oc1.ap-singapore-1.aaaaaaaap2qwxovwnfdsddsrlnmbcvlfan6fy52oohb5gjoe5ejmllinn73a"
 
 SHAPE = "VM.Standard.A1.Flex"
-OCPUS = 1
-MEMORY_GB = 6.0
+OCPUS = 2
+MEMORY_GB = 12.0
 DISPLAY_NAME = "crypto-arbitrage-scanner"
 
 POLL_SECONDS = max(5, int(os.getenv("POLL_SECONDS", "15")))
@@ -121,8 +121,8 @@ def hard_safety_check() -> None:
         "region": REGION == "ap-singapore-1",
         "availability_domain": AVAILABILITY_DOMAIN == "EmQk:AP-SINGAPORE-1-AD-1",
         "shape": SHAPE == "VM.Standard.A1.Flex",
-        "ocpus": OCPUS == 1,
-        "memory_gb": MEMORY_GB == 6.0,
+        "ocpus": OCPUS == 2,
+        "memory_gb": MEMORY_GB == 12.0,
         "display_name": DISPLAY_NAME == "crypto-arbitrage-scanner",
     }
     failed = [name for name, ok in checks.items() if not ok]
