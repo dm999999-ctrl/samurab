@@ -7,8 +7,8 @@ This agent continuously polls OCI Compute Capacity Report for Singapore A1 Alway
 - Region: `ap-singapore-1`
 - Availability Domain: `EmQk:AP-SINGAPORE-1-AD-1`
 - Shape: `VM.Standard.A1.Flex`
-- OCPU: `1`
-- RAM: `6 GB`
+- OCPU: `2`
+- RAM: `12 GB`
 - Image: Ubuntu 26.04 ARM64
 - Display name: `crypto-arbitrage-scanner`
 - Public IP: enabled
