@@ -15,7 +15,7 @@ permissions:
 jobs:
   watch:
     runs-on: ubuntu-24.04
-    timeout-minutes: 355
+    timeout-minutes: 358
     env:
       OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
       OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
@@ -24,7 +24,7 @@ jobs:
       THROTTLE_BACKOFF_INITIAL: "2"
       THROTTLE_BACKOFF_MAX: "60"
       EXISTING_CHECK_INTERVAL: "30"
-      RUN_WINDOW_SECONDS: "20700"
+      RUN_WINDOW_SECONDS: "21480"
       VERIFY_SECONDS: "180"
     steps:
       - name: Checkout
