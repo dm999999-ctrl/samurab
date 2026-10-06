@@ -29,8 +29,8 @@ SUBNET_ID = "ocid1.subnet.oc1.ap-singapore-1.aaaaaaaaesafpzvnjpdyjgjjge23c4vteqm
 IMAGE_ID = "ocid1.image.oc1.ap-singapore-1.aaaaaaaap2qwxovwnfdsddsrlnmbcvlfan6fy52oohb5gjoe5ejmllinn73a"
 
 SHAPE = "VM.Standard.A1.Flex"
-OCPUS = 2
-MEMORY_GB = 12.0
+OCPUS = 1
+MEMORY_GB = 6.0
 DISPLAY_NAME = "crypto-arbitrage-scanner"
 
 POLL_SECONDS = max(1, int(os.getenv("POLL_SECONDS", "1")))
@@ -81,17 +81,21 @@ def get_network_client(config: oci.config.Config) -> oci.core.VirtualNetworkClie
 
 
 def capacity_status(compute: oci.core.ComputeClient) -> str:
-    body = oci.core.models.ComputeCapacityReportShapeAvailability(
-        instance_shape=SHAPE,
-        instance_shape_config=oci.core.models.InstanceShapeConfig(
-            ocpus=OCPUS,
-            memory_in_g_bs=MEMORY_GB,
-        ),
+    details = oci.core.models.CreateComputeCapacityReportDetails(
+        compartment_id=COMPARTMENT_ID,
+        availability_domain=AVAILABILITY_DOMAIN,
+        shape_availabilities=[
+            oci.core.models.CreateCapacityReportShapeAvailabilityDetails(
+                instance_shape=SHAPE,
+                instance_shape_config=oci.core.models.CapacityReportInstanceShapeConfig(
+                    ocpus=OCPUS,
+                    memory_in_gbs=MEMORY_GB,
+                ),
+            )
+        ],
     )
     report = compute.create_compute_capacity_report(
-        availability_domain=AVAILABILITY_DOMAIN,
-        compartment_id=COMPARTMENT_ID,
-        compute_capacity_report_shape_availability_details=[body],
+        create_compute_capacity_report_details=details,
     ).data
 
     status = report.shape_availabilities[0].availability_status
