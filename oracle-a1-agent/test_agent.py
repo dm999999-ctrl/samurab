@@ -41,3 +41,25 @@ def test_fail_closed_when_target_is_changed():
             raise AssertionError("Safety check should reject fallback shape")
     finally:
         module.SHAPE = original
+
+
+def test_existing_instance_query_does_not_limit_to_running(monkeypatch):
+    calls = []
+
+    class Response:
+        data = []
+        has_next_page = False
+
+    class Compute:
+        def list_instances(self, **kwargs):
+            calls.append(kwargs)
+            return Response()
+
+    module.list_existing_instances(Compute())
+    assert calls
+    assert "lifecycle_state" not in calls[0]
+
+
+def test_launch_retry_constants_are_bounded():
+    assert module.LAUNCH_RETRY_INITIAL >= 1
+    assert module.LAUNCH_RETRY_MAX >= module.LAUNCH_RETRY_INITIAL
