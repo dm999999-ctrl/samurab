@@ -18,7 +18,7 @@ This agent continuously polls OCI Compute Capacity Report for Singapore A1 Alway
 
 The agent is fail-closed. It does not fall back to E5, change the requested size, or create a second scanner VM. Unexpected API errors stop the current run rather than triggering an unsafe launch.
 
-The polling process runs for up to 5h45m per GitHub-hosted job. The workflow is scheduled again every 6 hours so the watcher can continue without requiring another VM.
+The agent polls normally every 1 second for up to 5h45m per GitHub-hosted job. OCI throttling/transient responses (including HTTP 429) trigger exponential backoff up to 60 seconds, then normal 1-second polling resumes after a successful capacity check. The workflow is scheduled again every 6 hours so the watcher can continue without requiring another VM.
 
 ## GitHub secrets
 
