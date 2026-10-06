@@ -13,9 +13,16 @@ def test_exact_target_constants():
     assert module.REGION == "ap-singapore-1"
     assert module.AVAILABILITY_DOMAIN == "EmQk:AP-SINGAPORE-1-AD-1"
     assert module.SHAPE == "VM.Standard.A1.Flex"
-    assert module.OCPUS == 2
-    assert module.MEMORY_GB == 12.0
+    assert module.OCPUS == 1
+    assert module.MEMORY_GB == 6.0
     assert module.DISPLAY_NAME == "crypto-arbitrage-scanner"
+
+def test_capacity_report_models_exist():
+    import oci
+
+    assert hasattr(oci.core.models, "CreateComputeCapacityReportDetails")
+    assert hasattr(oci.core.models, "CreateCapacityReportShapeAvailabilityDetails")
+    assert hasattr(oci.core.models, "CapacityReportInstanceShapeConfig")
 
 
 def test_hard_safety_check():
