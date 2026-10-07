@@ -1,0 +1,57 @@
+name: Oracle A1 Capacity Agent
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "7 */6 * * *"
+
+concurrency:
+  group: oracle-a1-capacity-agent
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 358
+    env:
+      OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+      OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+      POLL_SECONDS: "1"
+      THROTTLE_BACKOFF_INITIAL: "2"
+      THROTTLE_BACKOFF_MAX: "60"
+      EXISTING_CHECK_INTERVAL: "30"
+      RUN_WINDOW_SECONDS: "21480"
+      VERIFY_SECONDS: "180"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        working-directory: oracle-a1-agent
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Run unit safety tests
+        working-directory: oracle-a1-agent
+        run: python -m pytest -q
+
+      - name: Run A1 capacity agent
+        working-directory: oracle-a1-agent
+        run: python capacity_agent.py
+
+      - name: Upload A1 capacity history
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: a1-capacity-history-${{ github.run_number }}
+          path: oracle-a1-agent/capacity-history.csv
+          if-no-files-found: warn
+          retention-days: 90
