@@ -39,6 +39,14 @@ export type DiscoveryConfig = {
   minExchangeCount: number;
   supportedExchanges: ExchangeId[];
   majorQuoteAssets: string[];
+  /** Quotes retained by the selected-token market view; empty means no quote restriction. */
+  supportedMarketQuotes?: string[];
+  /** Deterministic cap for the ranked selected-token market view; zero means uncapped. */
+  maxSelectedTokenMarkets?: number;
+  /** Optional explicit canonical symbols/asset IDs for a reproducible F2 market report. */
+  selectedTokenSymbols?: string[];
+  /** Default number of ranked Phase A assets used by the separate F2 market view. */
+  selectedTokenLimit?: number;
   meaningfulVolumeMinimum: number;
   scoreWeights: { coverage: number; liquidity: number; liquidExchanges: number; quoteAvailability: number; activity: number };
 };
@@ -72,7 +80,37 @@ export type EligiblePair = {
   markets: NormalizedSpotMarket[];
   status: 'ELIGIBLE' | 'PARTIAL_DISCOVERY';
 };
+/** A real canonical spot market touching a selected asset; never a generated pair. */
+export type SelectedTokenMarket = {
+  canonicalPair: string;
+  baseAsset: string;
+  quoteAsset: string;
+  selectedAssetIds: string[];
+  /** Number of selected assets appearing on either side of this exact market. */
+  selectedTokenRelevance: 0 | 1 | 2;
+  exchangeCount: number;
+  exchanges: ExchangeId[];
+  totalQuoteVolume24hByExchange: Partial<Record<ExchangeId, number>>;
+  totalQuoteVolume24h: number | null;
+  /** Mean venue-local volume percentile; avoids comparing raw BTC/ETH/stablecoin units. */
+  liquidityScore: number | null;
+  quotePriority: number;
+  activityScore: number;
+  rank: number;
+  markets: NormalizedSpotMarket[];
+};
+export type MarketPruningTier = {
+  tier: 'A' | 'B' | 'C';
+  description: string;
+  markets: SelectedTokenMarket[];
+  marketCount: number;
+  exchangeBookCount: number;
+  exchangesByMarket: Record<string, ExchangeId[]>;
+  quoteDistribution: Record<string, number>;
+  possibleExactCrossExchangeComparisons: number;
+};
 export type DiscoveryReport = {
+  /** Additive F2 fields preserve v1 compatibility for the existing Phase B loader. */
   schemaVersion: 1;
   runId: string;
   startedAt: number;
@@ -88,6 +126,14 @@ export type DiscoveryReport = {
   assets: RankedAsset[];
   eligiblePairs: EligiblePair[];
   pairCount: number;
+  /** Additive F2 selected-token view; existing v1 fields retain their original semantics. */
+  selectedTokenIds?: string[];
+  eligibleMarketCount?: number;
+  selectedTokenMarkets?: SelectedTokenMarket[];
+  selectedTokenMarketCount?: number;
+  projectedExchangeBookCount?: number;
+  exactCrossExchangeMarketMatchCount?: number;
+  marketPruningTiers?: MarketPruningTier[];
   coverageComplete: boolean;
   methodology: {
     scoring: string;

@@ -19,6 +19,18 @@ async function main() {
     nonStableAssetsEligible: report.nonStableAssetsEligible,
     selectedAssetCount: report.selectedAssetCount,
     eligiblePairCount: report.pairCount,
+    selectedTokenCount: report.selectedTokenIds?.length ?? 0,
+    eligibleCanonicalMarketCount: report.eligibleMarketCount ?? 0,
+    selectedCanonicalMarketCount: report.selectedTokenMarketCount ?? 0,
+    projectedExchangeBookCount: report.projectedExchangeBookCount ?? 0,
+    exactCrossExchangeMarketMatchCount: report.exactCrossExchangeMarketMatchCount ?? 0,
+    marketsByQuoteAsset: Object.fromEntries([...new Set((report.selectedTokenMarkets ?? []).map((market) => market.quoteAsset))].sort().map((quote) => [quote, (report.selectedTokenMarkets ?? []).filter((market) => market.quoteAsset === quote).length])),
+    marketsByExchange: Object.fromEntries(report.exchanges.map(({ exchange }) => [exchange, (report.selectedTokenMarkets ?? []).reduce((count, market) => count + (market.markets.some((listing) => listing.exchange === exchange) ? 1 : 0), 0)])),
+    subscriptionsByExchange: Object.fromEntries(report.exchanges.map(({ exchange }) => [exchange, (report.selectedTokenMarkets ?? []).reduce((count, market) => count + market.markets.filter((listing) => listing.exchange === exchange).length, 0)])),
+    marketPruningTiers: (report.marketPruningTiers ?? []).map(({ tier, marketCount, exchangeBookCount, quoteDistribution, possibleExactCrossExchangeComparisons, markets }) => ({
+      tier, marketCount, exchangeBookCount, quoteDistribution, possibleExactCrossExchangeComparisons,
+      markets: markets.map(({ canonicalPair, exchangeCount, exchanges }) => ({ canonicalPair, exchangeCount, exchanges })),
+    })),
     topAssets: report.assets.slice(0, 20).map(({ rank, symbol, exchangeCount, arbitrageRelevanceScore }) => ({ rank, symbol, exchangeCount, score: Number(arbitrageRelevanceScore.toFixed(2)) })),
     output: latestPath,
   };

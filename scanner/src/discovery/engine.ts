@@ -18,6 +18,10 @@ export function discoveryConfig(env: Record<string, string | undefined> = proces
     minExchangeCount: Math.max(1, positiveInteger(env.MIN_EXCHANGE_COUNT, 2)),
     supportedExchanges: [...SUPPORTED_EXCHANGES],
     majorQuoteAssets: (env.DISCOVERY_MAJOR_QUOTES ?? 'USDT,USDC,USD,FDUSD,DAI').split(',').map((item) => item.trim().toUpperCase()).filter(Boolean),
+    supportedMarketQuotes: (env.DISCOVERY_MARKET_QUOTES ?? 'USDT,USDC,BTC,ETH').split(',').map((item) => item.trim().toUpperCase()).filter(Boolean),
+    maxSelectedTokenMarkets: positiveInteger(env.DISCOVERY_MAX_SELECTED_MARKETS, 500),
+    selectedTokenLimit: positiveInteger(env.DISCOVERY_SELECTED_TOKEN_LIMIT, 25),
+    ...(env.DISCOVERY_SELECTED_TOKENS?.trim() ? { selectedTokenSymbols: env.DISCOVERY_SELECTED_TOKENS.split(',').map((item) => item.trim()).filter(Boolean) } : {}),
     meaningfulVolumeMinimum: weight(env.DISCOVERY_MIN_QUOTE_VOLUME, 0),
     scoreWeights: {
       coverage: weight(env.SCORE_WEIGHT_COVERAGE, defaultWeights.coverage),

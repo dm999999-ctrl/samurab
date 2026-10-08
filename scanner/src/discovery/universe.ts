@@ -1,5 +1,5 @@
 import { canonicalizeMarket, isLeveragedOrSynthetic, isStablecoin, classifyAsset, MAJOR_QUOTE_ASSETS } from './symbol-map';
-import type { DiscoveryConfig, DiscoveryReport, ExchangeDiscoveryResult, EligiblePair, NormalizedSpotMarket, RankedAsset } from './types';
+import type { DiscoveryConfig, DiscoveryReport, ExchangeDiscoveryResult, EligiblePair, NormalizedSpotMarket, RankedAsset, SelectedTokenMarket, MarketPruningTier } from './types';
 
 export function buildDiscoveryReport(
   exchanges: ExchangeDiscoveryResult[],
@@ -104,6 +104,52 @@ export function buildDiscoveryReport(
     || a.symbol.localeCompare(b.symbol)
     || a.assetId.localeCompare(b.assetId));
   const assets = candidates.slice(0, Math.max(0, config.target)).map((asset, index) => ({ ...asset, rank: index + 1 }));
+  const explicitSelection = config.selectedTokenSymbols?.map((value) => value.trim().toUpperCase().replace(/^ASSET:/, '')).filter(Boolean);
+  const selectedAssets = explicitSelection?.length
+    ? explicitSelection.map((symbol) => classifyAsset(symbol)).filter((asset) => asset.mapping !== 'ambiguous')
+    : assets.slice(0, config.selectedTokenLimit ?? 25).map((asset) => ({ assetId: asset.assetId, symbol: asset.symbol, mapping: 'exact-symbol' as const }));
+  const selectedById = new Map(selectedAssets.map((asset) => [asset.assetId, asset.symbol] as const));
+  const quotePriority = new Map((config.supportedMarketQuotes ?? config.majorQuoteAssets).map((quote, index) => [quote, index]));
+  const selectedTokenGroups = groupBy(markets.filter((market) => selectedTokenRelevance(market, selectedById) > 0
+    && market.assetMapping !== 'ambiguous'
+    && (!config.supportedMarketQuotes?.length || quotePriority.has(market.quoteAsset))), (market) => market.canonicalPair);
+  const rankedSelectedMarkets = [...selectedTokenGroups.entries()].map(([canonicalPair, listings]) => {
+    const [baseAsset, quoteAsset] = canonicalPair.split('/');
+    const exchangesForMarket = [...new Set(listings.map((market) => market.exchange))].sort();
+    const volumeByExchange: Partial<Record<NormalizedSpotMarket['exchange'], number>> = {};
+    for (const market of listings) {
+      if (market.volumeQuote24h !== undefined && market.volumeQuote24h > 0) {
+        volumeByExchange[market.exchange] = (volumeByExchange[market.exchange] ?? 0) + market.volumeQuote24h;
+      }
+    }
+    const totalQuoteVolume = listings.every((market) => market.volumeQuote24h !== undefined)
+      ? listings.reduce((sum, market) => sum + (market.volumeQuote24h ?? 0), 0) : null;
+    const activityScore = listings.filter((market) => (market.lastPrice ?? 0) > 0 || (market.volumeBase24h ?? 0) > 0 || (market.volumeQuote24h ?? 0) > 0).length / listings.length;
+    const relevance = Math.max(...listings.map((market) => selectedTokenRelevance(market, selectedById))) as 1 | 2;
+    const selectedAssetIds = [classifyAsset(baseAsset), classifyAsset(quoteAsset)]
+      .filter((asset) => selectedById.has(asset.assetId)).map((asset) => asset.assetId).sort();
+    const liquidityPercentiles = listings.map((market) => volumePercentiles.get(marketKey(market))).filter((value): value is number => value !== undefined);
+    const liquidityScore = liquidityPercentiles.length ? mean(liquidityPercentiles) : null;
+    return {
+      canonicalPair, baseAsset, quoteAsset, selectedAssetIds, selectedTokenRelevance: relevance,
+      exchangeCount: exchangesForMarket.length, exchanges: exchangesForMarket, totalQuoteVolume24hByExchange: volumeByExchange,
+      totalQuoteVolume24h: totalQuoteVolume, liquidityScore, quotePriority: quotePriority.get(quoteAsset) ?? Number.MAX_SAFE_INTEGER,
+      activityScore, rank: 0, markets: listings,
+    } satisfies Omit<SelectedTokenMarket, 'rank'> & { rank: number };
+  }).sort((a, b) => Number(b.exchangeCount >= 2) - Number(a.exchangeCount >= 2)
+    || b.selectedTokenRelevance - a.selectedTokenRelevance
+    || b.exchangeCount - a.exchangeCount
+    || (b.liquidityScore ?? -1) - (a.liquidityScore ?? -1)
+    || b.activityScore - a.activityScore
+    || a.quotePriority - b.quotePriority
+    || a.canonicalPair.localeCompare(b.canonicalPair));
+  const selectedTokenMarketLimit = config.maxSelectedTokenMarkets ?? 0;
+  const selectedTokenMarkets: SelectedTokenMarket[] = rankedSelectedMarkets
+    .slice(0, selectedTokenMarketLimit > 0 ? selectedTokenMarketLimit : undefined)
+    .map((market, index) => ({ ...market, rank: index + 1 }));
+  const subscriptionsProjected = selectedTokenMarkets.reduce((sum, market) => sum + market.markets.length, 0);
+  const routeMatches = selectedTokenMarkets.filter((market) => market.exchangeCount >= 2).length;
+  const marketPruningTiers = buildMarketPruningTiers(selectedTokenMarkets);
   const failure = exchanges.some((result) => !['AVAILABLE','EMPTY_RESULT'].includes(result.status));
   return {
     schemaVersion: 1, runId, startedAt, completedAt,
@@ -113,6 +159,13 @@ export function buildDiscoveryReport(
     nonStableAssetsEligible: candidates.length, selectedAssetCount: assets.length,
     quoteAssets: quotes, assets, eligiblePairs,
     pairCount: eligiblePairs.length, coverageComplete,
+    selectedTokenIds: [...selectedById.keys()],
+    eligibleMarketCount: rankedSelectedMarkets.length,
+    selectedTokenMarkets,
+    selectedTokenMarketCount: selectedTokenMarkets.length,
+    projectedExchangeBookCount: subscriptionsProjected,
+    exactCrossExchangeMarketMatchCount: routeMatches,
+    marketPruningTiers,
     methodology: {
       scoring: 'Score is a 0–100 weighted mean. Default weights: coverage 35%, exchange-native liquidity percentile 35%, liquid exchange count 15%, major quote availability 10%, activity 5%. Configured weights are renormalized only across available components.',
       missingData: 'Missing exchange fields remain omitted. Missing volume is excluded from liquidity ranking; unavailable components are omitted and weights renormalized, and discovery failures are reported rather than interpreted as zero markets.',
@@ -122,6 +175,40 @@ export function buildDiscoveryReport(
     },
   };
 }
+
+function selectedTokenRelevance(market: NormalizedSpotMarket, selected: Map<string, string>): 0 | 1 | 2 {
+  const base = selected.has(market.canonicalAssetId);
+  const quote = selected.has(classifyAsset(market.quoteAsset).assetId);
+  return Number(base) + Number(quote) as 0 | 1 | 2;
+}
+
+/** Turns ranked real listings into cumulative, deterministic arbitrage-oriented tiers. */
+export function buildMarketPruningTiers(markets: SelectedTokenMarket[]): MarketPruningTier[] {
+  const crossExchange = markets.filter((market) => market.exchangeCount >= 2);
+  // Tier A is the compact high-confidence core; B broadens depth/venue coverage.
+  const tierA = crossExchange.slice(0, Math.min(20, crossExchange.length));
+  const tierB = crossExchange.slice(0, Math.min(40, crossExchange.length));
+  return [
+    makeTier('A', 'Top 20 ranked exact markets with at least two exchange listings; compact initial live candidate.', tierA),
+    makeTier('B', 'Top 40 ranked exact markets with at least two exchange listings; broader candidate.', tierB),
+    makeTier('C', 'All discovered catalog markets, including single-exchange listings; research/catalog only, not all cross-exchange eligible.', markets),
+  ];
+}
+
+function makeTier(tier: MarketPruningTier['tier'], description: string, markets: SelectedTokenMarket[]): MarketPruningTier {
+  const quoteDistribution: Record<string, number> = {};
+  const exchangesByMarket: Record<string, NormalizedSpotMarket['exchange'][]> = {};
+  let books = 0, comparisons = 0;
+  for (const market of markets) {
+    quoteDistribution[market.quoteAsset] = (quoteDistribution[market.quoteAsset] ?? 0) + 1;
+    exchangesByMarket[market.canonicalPair] = [...market.exchanges];
+    books += market.markets.length;
+    comparisons += market.exchangeCount * (market.exchangeCount - 1) / 2;
+  }
+  return { tier, description, markets, marketCount: markets.length, exchangeBookCount: books,
+    exchangesByMarket, quoteDistribution, possibleExactCrossExchangeComparisons: comparisons };
+}
+
 function groupBy<T>(values: T[], keyFn: (value: T) => string): Map<string, T[]> {
   const groups = new Map<string, T[]>();
   for (const value of values) {
