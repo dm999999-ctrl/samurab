@@ -6,11 +6,12 @@ afterEach(async () => { await Promise.all(runtimes.splice(0).map((runtime) => ru
 
 describe('market-data runtime boundary', () => {
   it('reads controlled rollout settings without changing the legacy scanner port', () => {
-    expect(runtimeOptionsFromEnv({ MAX_LIVE_PAIRS: '3', MARKET_DATA_PORT: '4101', LIVE_PAIRS: 'BTC/USDT,ETH/USDT' })).toEqual({
+    const options = runtimeOptionsFromEnv({ MAX_LIVE_PAIRS: '3', MARKET_DATA_PORT: '4101', LIVE_PAIRS: 'BTC/USDT,ETH/USDT' });
+    expect(options).toMatchObject({
       reportPath: 'data/discovery/latest.json', maxPairs: 3, pairs: ['BTC/USDT', 'ETH/USDT'], depthLevels: 20, port: 4101,
-      exchanges: ['binance', 'bybit', 'okx', 'kucoin', 'gate', 'bitget', 'htx', 'crypto.com', 'coinbase'],
-      requiredExchanges: [], connectExchanges: true,
+      exchanges: ['binance', 'bybit', 'okx', 'kucoin', 'gate', 'bitget', 'htx', 'crypto.com', 'coinbase'], requiredExchanges: [], connectExchanges: true,
     });
+    expect(options.arbitrage).toMatchObject({ feeRates: { binance: 0.001 }, maxBookAgeMs: 60_000, minimumNetSpread: 0, minimumExecutableNotional: 10 });
   });
 
   it('rejects malformed limits rather than silently widening the rollout', () => {

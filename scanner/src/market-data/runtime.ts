@@ -8,6 +8,9 @@ import { MarketDataCoordinator } from './coordinator';
 import type { MarketDataResourceTelemetry } from './types';
 import { LiveExchangeSessions } from './live-sessions';
 import { MEXC_MAX_SUBSCRIPTIONS_PER_SOCKET } from './mexc-protocol';
+import { ArbitrageMonitor } from '../arbitrage/monitor';
+import { arbitrageConfigFromEnv, DEFAULT_ARBITRAGE_CONFIG } from '../arbitrage/config';
+import type { ArbitrageConfig } from '../arbitrage/detection';
 
 export type RuntimeOptions = {
   reportPath: string;
@@ -18,6 +21,7 @@ export type RuntimeOptions = {
   exchanges?: ExchangeId[];
   requiredExchanges?: ExchangeId[];
   connectExchanges?: boolean;
+  arbitrage?: ArbitrageConfig;
 };
 
 export type RuntimeStatus = 'STARTING' | 'RUNNING' | 'STOPPING' | 'STOPPED';
@@ -36,10 +40,12 @@ export class MarketDataRuntime {
   private readonly sessions: LiveExchangeSessions;
   readonly universe: LiveUniverse;
   readonly coordinator: MarketDataCoordinator;
+  private readonly arbitrage: ArbitrageMonitor;
 
   private constructor(universe: LiveUniverse, options: RuntimeOptions) {
     this.universe = universe;
     this.coordinator = new MarketDataCoordinator(universe.subscriptions, { depthLevels: options.depthLevels });
+    this.arbitrage = new ArbitrageMonitor(this.coordinator, universe.subscriptions, options.arbitrage ?? DEFAULT_ARBITRAGE_CONFIG);
     this.sessions = new LiveExchangeSessions(universe.subscriptions, this.coordinator);
     this.options = options;
     this.delay.enable();
@@ -156,6 +162,7 @@ export class MarketDataRuntime {
           pending: states.filter((state) => state.pending).length };
       })(),
       exchanges,
+      arbitrage: this.arbitrage.snapshot(now),
       resources: this.resourceTelemetry(now),
     };
   }
@@ -198,6 +205,7 @@ export class MarketDataRuntime {
     if (this.status === 'STOPPED') return;
     this.status = 'STOPPING';
     this.sessions.stop();
+    this.arbitrage.stop();
     this.delay.disable();
     if (this.server) await new Promise<void>((resolve, reject) => this.server!.close((error) => error ? reject(error) : resolve()));
     this.status = 'STOPPED';
@@ -226,6 +234,7 @@ export function runtimeOptionsFromEnv(env = process.env): RuntimeOptions {
   const requiredExchanges = parseRequiredExchanges(env.MARKET_DATA_REQUIRED_EXCHANGES ?? 'none', exchanges);
   return { reportPath, maxPairs, ...(pairs?.length ? { pairs } : {}), depthLevels, port, exchanges,
     requiredExchanges,
+    arbitrage: arbitrageConfigFromEnv(env),
     connectExchanges: (env.LIVE_MARKET_DATA ?? 'true').toLowerCase() !== 'false' };
 }
 

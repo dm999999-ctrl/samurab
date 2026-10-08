@@ -36,6 +36,9 @@ type Entry = {
 
 export class MarketDataCoordinator {
   private readonly entries = new Map<string, Entry>();
+  private readonly bookChangeListeners = new Set<(exchange: ExchangeId, symbol: string) => void>();
+  onBookChange(listener: (exchange: ExchangeId, symbol: string) => void): () => void { this.bookChangeListeners.add(listener); return () => this.bookChangeListeners.delete(listener); }
+  private emitBookChange(exchange: ExchangeId, symbol: string): void { for (const listener of this.bookChangeListeners) { try { listener(exchange, symbol); } catch (error) { console.error('Book-change listener failed:', error); } } }
   private readonly exchangeMessages = new Map<ExchangeId, number>();
   private readonly exchangeReconnects = new Map<ExchangeId, number>();
   private readonly exchangeLastMessage = new Map<ExchangeId, number>();
@@ -74,6 +77,7 @@ export class MarketDataCoordinator {
         entry.lastFeedHeartbeatTimestamp ??= Date.now();
       }
       if (status === 'STARTING' || status === 'DISCONNECTED') entry.sequenceValid = false;
+      this.emitBookChange(exchange, entry.subscription.exchangeSymbol);
     }
     if (reconnects !== undefined) this.exchangeReconnects.set(exchange, reconnects);
   }
@@ -91,6 +95,7 @@ export class MarketDataCoordinator {
       entry.feedHealthy = healthy;
       if (healthy) entry.lastFeedHeartbeatTimestamp = timestamp;
       if (healthy && entry.status === 'UNHEALTHY') entry.status = 'RESYNCING';
+      this.emitBookChange(exchange, entry.subscription.exchangeSymbol);
     }
   }
 
@@ -102,6 +107,7 @@ export class MarketDataCoordinator {
       entry.lastFailureReason = 'invalid snapshot fields (empty/invalid levels, timestamp, or sequence)';
       entry.status = 'ERROR'; entry.sequenceValid = false;
       this.recordMessage(entry.subscription.exchange, performance.now() - started);
+      this.emitBookChange(exchange, exchangeSymbol);
       return false;
     }
     entry.book.loadSnapshot(levels.sequence, trim(levels.bids, this.maxDepth, true), trim(levels.asks, this.maxDepth, false), levels.receivedTimestamp ?? Date.now(), levels.exchangeTimestamp);
@@ -118,6 +124,7 @@ export class MarketDataCoordinator {
     entry.everSynchronized = true;
     entry.lastFailureReason = null;
     this.recordMessage(exchange, performance.now() - started);
+    this.emitBookChange(exchange, exchangeSymbol);
     return true;
   }
 
@@ -130,6 +137,7 @@ export class MarketDataCoordinator {
       entry.lastFailureReason = 'invalid delta fields';
       entry.status = 'ERROR'; entry.sequenceValid = false;
       this.recordMessage(exchange, performance.now() - started);
+      this.emitBookChange(exchange, exchangeSymbol);
       return false;
     }
     if (!entry.sequenceValid) {
@@ -137,6 +145,7 @@ export class MarketDataCoordinator {
       entry.lastFailureReason = 'delta rejected while sequence is invalid; snapshot recovery required';
       entry.status = 'RESYNCING';
       this.recordMessage(exchange, performance.now() - started);
+      this.emitBookChange(exchange, exchangeSymbol);
       return false;
     }
     const priorSequence = entry.book.sequence;
@@ -151,6 +160,7 @@ export class MarketDataCoordinator {
       this.recordError(entry, `sequence gap: update ${delta.firstUpdateId}-${delta.finalUpdateId} after ${priorSequence}`);
       entry.lastFailureReason = `sequence gap: update ${delta.firstUpdateId}-${delta.finalUpdateId} after ${priorSequence}`;
       this.recordMessage(exchange, performance.now() - started);
+      this.emitBookChange(exchange, exchangeSymbol);
       return false;
     }
     if (priorSequence === null) {
@@ -160,6 +170,7 @@ export class MarketDataCoordinator {
       this.recordError(entry, 'delta received before snapshot');
       entry.lastFailureReason = 'delta received before snapshot';
       this.recordMessage(exchange, performance.now() - started);
+      this.emitBookChange(exchange, exchangeSymbol);
       return false;
     }
     entry.sequenceValid = true;
@@ -175,6 +186,7 @@ export class MarketDataCoordinator {
     entry.everSynchronized = true;
     entry.lastFailureReason = null;
     this.recordMessage(exchange, performance.now() - started);
+    this.emitBookChange(exchange, exchangeSymbol);
     return true;
   }
 
@@ -183,6 +195,7 @@ export class MarketDataCoordinator {
     entry.status = 'RESYNCING'; entry.sequenceValid = false; entry.resynchronizations += 1;
     this.recordError(entry, reason);
     entry.lastFailureReason = reason;
+    this.emitBookChange(exchange, exchangeSymbol);
   }
 
   markSequenceGap(exchange: ExchangeId, exchangeSymbol: string, expected: number | string, observed: number | string, reason: string): void {
@@ -192,6 +205,7 @@ export class MarketDataCoordinator {
     entry.book.markResyncing();
     this.recordError(entry, reason);
     entry.lastFailureReason = reason;
+    this.emitBookChange(exchange, exchangeSymbol);
   }
 
   getBook(exchange: ExchangeId, exchangeSymbol: string, now = Date.now(), maxAgeMs = configuredAge(exchange)): OrderBookState {
