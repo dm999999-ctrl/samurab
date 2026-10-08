@@ -13,6 +13,7 @@ import { arbitrageConfigFromEnv, DEFAULT_ARBITRAGE_CONFIG } from '../arbitrage/c
 import { profitabilityLimitsFromEnv, type ProfitabilityLimits } from '../arbitrage/profitability';
 import type { ArbitrageConfig } from '../arbitrage/detection';
 
+import { isUsableOrderBook } from './validity';
 export type RuntimeOptions = {
   reportPath: string;
   maxPairs: number;
@@ -130,7 +131,7 @@ export class MarketDataRuntime {
       coinbaseSnapshotBootstrap: this.sessions.coinbaseSnapshotTelemetry(),
       markets: this.coordinator.subscriptions().map((subscription) => {
         const book = this.coordinator.getBook(subscription.exchange, subscription.exchangeSymbol, now);
-        const diagnostics = this.coordinator.symbolDiagnostics(subscription.exchange, subscription.exchangeSymbol, now);
+        const diagnostics = this.coordinator.symbolDiagnostics(subscription.exchange, subscription.exchangeSymbol, now, undefined, book);
         const binanceBootstrap = subscription.exchange === 'binance' ? this.sessions.symbolBootstrapState(subscription.exchangeSymbol) : null;
         return {
           exchange: book.exchange, exchangeSymbol: book.exchangeSymbol, canonicalPair: book.canonicalPair,
@@ -143,7 +144,7 @@ export class MarketDataRuntime {
           bestAsk: book.bestAsk, bestAskQuantity: book.bestAskQuantity,
           exchangeTimestamp: book.exchangeTimestamp, receivedTimestamp: book.receivedTimestamp,
           ageMs: book.sequence === null ? null : Math.max(0, now - book.receivedTimestamp),
-          usable: this.coordinator.isUsable(book.exchange, book.exchangeSymbol, now),
+          usable: isUsableOrderBook(book, { connected: book.feedHealth === 'HEALTHY' }),
           diagnostics: {
             ...diagnostics,
             snapshotState: binanceBootstrap?.state ?? diagnostics.snapshotState,
@@ -159,10 +160,12 @@ export class MarketDataRuntime {
       }),
       marketStateCounts: (() => {
         const states = this.coordinator.subscriptions().map((subscription) => this.coordinator.symbolDiagnostics(subscription.exchange, subscription.exchangeSymbol, now));
-        return { synchronized: states.filter((state) => state.synchronized).length,
-          quiet: states.filter((state) => state.synchronizationState === 'QUIET').length,
-          stale: states.filter((state) => state.stale).length, failed: states.filter((state) => state.failed).length,
-          pending: states.filter((state) => state.pending).length };
+        const synchronized = states.filter((state) => state.synchronizationState === 'SYNCHRONIZED').length;
+        const quiet = states.filter((state) => state.synchronizationState === 'QUIET').length;
+        const stale = states.filter((state) => state.stale).length;
+        const failed = states.filter((state) => state.failed).length;
+        const pending = states.length - synchronized - quiet - stale - failed;
+        return { total: states.length, synchronized, quiet, stale, failed, pending };
       })(),
       exchanges,
       arbitrage: this.arbitrage.snapshot(now),

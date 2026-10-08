@@ -210,8 +210,8 @@ export class MarketDataCoordinator {
 
   getBook(exchange: ExchangeId, exchangeSymbol: string, now = Date.now(), maxAgeMs = configuredAge(exchange)): OrderBookState {
     const entry = this.getEntry(exchange, exchangeSymbol);
-    const source = entry.book.snapshot;
-    const bids = source.bids.slice(0, this.maxDepth), asks = source.asks.slice(0, this.maxDepth);
+    const source = entry.book.getSnapshot(this.maxDepth);
+    const bids = source.bids, asks = source.asks;
     const status: MarketBookStatus = entry.status === 'STARTING' ? 'STARTING'
       : !entry.connected || entry.status === 'DISCONNECTED' ? 'DISCONNECTED'
       : entry.status === 'ERROR' ? 'ERROR'
@@ -247,9 +247,14 @@ export class MarketDataCoordinator {
     const entries = [...this.entries.values()].filter((entry) => entry.subscription.exchange === exchange);
     const latencyRing = this.processingSamples.get(exchange);
     const latencies = latencyRing?.values ?? [];
-    const synced = entries.filter((entry) => this.getBook(exchange, entry.subscription.exchangeSymbol, now, maxAgeMs).synchronized).length;
-    const quiet = entries.filter((entry) => this.getBook(exchange, entry.subscription.exchangeSymbol, now, maxAgeMs).status === 'QUIET').length;
-    const stale = entries.filter((entry) => this.getBook(exchange, entry.subscription.exchangeSymbol, now, maxAgeMs).status === 'STALE').length;
+    let synced = 0, quiet = 0, stale = 0, unhealthy = 0;
+    for (const entry of entries) {
+      const status = this.getBook(exchange, entry.subscription.exchangeSymbol, now, maxAgeMs).status;
+      if (status === 'SYNCHRONIZED') synced += 1;
+      else if (status === 'QUIET') quiet += 1;
+      else if (status === 'STALE') stale += 1;
+      else if (status === 'UNHEALTHY') unhealthy += 1;
+    }
     const disconnected = entries.filter((entry) => entry.status === 'DISCONNECTED' || entry.status === 'STARTING').length;
     const errors = entries.flatMap((entry) => entry.errors);
     const messages = this.exchangeMessages.get(exchange) ?? 0;
@@ -257,7 +262,7 @@ export class MarketDataCoordinator {
       exchange, connections: entries.length ? Number(entries.some((entry) => entry.connected)) : 0,
       connectedStreams: entries.filter((entry) => entry.connected).length, subscriptions: entries.length,
       synchronizedBooks: synced, staleBooks: stale, disconnectedBooks: disconnected,
-      quietBooks: quiet, unhealthyBooks: entries.filter((entry) => this.getBook(exchange, entry.subscription.exchangeSymbol, now, maxAgeMs).status === 'UNHEALTHY').length,
+      quietBooks: quiet, unhealthyBooks: unhealthy,
       errorBooks: entries.filter((entry) => entry.status === 'ERROR').length,
       reconnects: this.exchangeReconnects.get(exchange) ?? 0, messages,
       messagesPerSecond: this.messagesPerSecond(exchange, now), lastMessageTimestamp: this.exchangeLastMessage.get(exchange) ?? null,
@@ -288,10 +293,10 @@ export class MarketDataCoordinator {
     }
   }
 
-  symbolDiagnostics(exchange: ExchangeId, exchangeSymbol: string, now = Date.now(), maxAgeMs = configuredAge(exchange)) {
+  symbolDiagnostics(exchange: ExchangeId, exchangeSymbol: string, now = Date.now(), maxAgeMs = configuredAge(exchange), suppliedBook?: OrderBookState) {
     const entry = this.getEntry(exchange, exchangeSymbol);
-    const book = this.getBook(exchange, exchangeSymbol, now, maxAgeMs);
-    const snapshot = entry.book.snapshot;
+    const book = suppliedBook ?? this.getBook(exchange, exchangeSymbol, now, maxAgeMs);
+    const snapshot = entry.book.snapshotMetadata;
     return {
       exchange, symbol: entry.subscription.exchangeSymbol, canonicalPair: entry.subscription.canonicalPair,
       subscriptionState: entry.connected ? 'SUBSCRIBED' : entry.status,

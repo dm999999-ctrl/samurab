@@ -49,7 +49,9 @@ describe('market-data runtime boundary', () => {
     expect(telemetry.resources.systemMemoryAvailableBytes).toBeGreaterThan(0);
     expect(telemetry.resources.systemCpuPercent).not.toBeUndefined();
     expect(telemetry.resources.networkRxBytesPerSecond).not.toBeUndefined();
-    expect(telemetry.marketStateCounts).toEqual({ synchronized: 0, quiet: 0, stale: 0, failed: 0, pending: telemetry.books });
+    expect(telemetry.marketStateCounts).toEqual({ total: telemetry.books, synchronized: 0, quiet: 0, stale: 0, failed: 0, pending: telemetry.books });
+    const { total, synchronized, quiet, stale, failed, pending } = telemetry.marketStateCounts;
+    expect(synchronized + quiet + stale + failed + pending).toBe(total);
     expect(telemetry.markets[0].diagnostics).toMatchObject({ pending: true, synchronized: false, failed: false,
       messagesReceived: 0, updatesApplied: 0, everSynchronized: false });
     expect(Object.values(telemetry.exchanges).every((item) => item?.synchronizedBooks === 0)).toBe(true);

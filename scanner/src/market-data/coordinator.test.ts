@@ -15,6 +15,7 @@ describe('in-memory multi-market coordinator', () => {
     expect(c.getBook('binance','BTCUSDT',1050,100).bids[0]).toEqual({price:100,quantity:2});
     const stats = c.getExchangeTelemetry('binance',1050,100);
     expect(stats.synchronizedBooks).toBe(1);
+    expect(stats.quietBooks).toBe(0);
     expect(stats.messages).toBe(0);
     expect(stats.averageProcessingLatencyMs).not.toBeNull();
   });
@@ -53,6 +54,9 @@ describe('in-memory multi-market coordinator', () => {
     expect(quiet.feedHealth).toBe('HEALTHY');
     expect(quiet.synchronized).toBe(true);
     expect(c.isUsable('binance','BTCUSDT',1300,200)).toBe(true);
+    const stats = c.getExchangeTelemetry('binance',1300,200);
+    expect(stats.synchronizedBooks).toBe(0);
+    expect(stats.quietBooks).toBe(1);
     c.setConnection('binance','DISCONNECTED');
     expect(c.getBook('binance','BTCUSDT',1300,200).status).toBe('DISCONNECTED');
     expect(c.isUsable('binance','BTCUSDT',1300,200)).toBe(false);
