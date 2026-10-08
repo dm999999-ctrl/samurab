@@ -53,11 +53,19 @@ describe('Phase D estimated execution profitability', () => {
     const result = evaluate({ buy: book('binance', [{ price: 99, quantity: 1 }], [{ price: 100, quantity: 0.5 }, { price: 101, quantity: 1 }]) }).opportunity!;
     expect(result.buyQuoteCost).toBe(100.5);
     expect(result.buyVWAP).toBe(100.5);
+    expect(result.buyDepthUsed).toEqual([
+      { price: 100, quantity: 0.5, quoteAmount: 50 },
+      { price: 101, quantity: 0.5, quoteAmount: 50.5 },
+    ]);
   });
   it('walks multiple SELL levels and computes the sell VWAP', () => {
     const result = evaluate({ sell: book('bybit', [{ price: 102, quantity: 0.5 }, { price: 101, quantity: 1 }], [{ price: 103, quantity: 2 }]) }).opportunity!;
     expect(result.sellQuoteProceeds).toBe(101.5);
     expect(result.sellVWAP).toBe(101.5);
+    expect(result.sellDepthUsed).toEqual([
+      { price: 102, quantity: 0.5, quoteAmount: 51 },
+      { price: 101, quantity: 0.5, quoteAmount: 50.5 },
+    ]);
   });
   it('reports different BUY and SELL VWAPs', () => {
     const result = evaluate({ buy: book('binance', [{ price: 99, quantity: 2 }], [{ price: 100, quantity: 0.5 }, { price: 101, quantity: 1 }]),

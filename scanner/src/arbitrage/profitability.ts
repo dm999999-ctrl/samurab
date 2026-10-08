@@ -32,7 +32,12 @@ export type ProfitabilityOpportunity = ArbitrageOpportunity & {
   buyBookAgeMs: number;
   sellBookAgeMs: number;
   freshness: 'ACTIVE' | 'QUIET';
+  /** Exact levels and quantities consumed by Phase D's executable-VWAP walk. */
+  buyDepthUsed: DepthFill[];
+  sellDepthUsed: DepthFill[];
 };
+
+export type DepthFill = { price: number; quantity: number; quoteAmount: number };
 
 export type ProfitabilityResult = {
   opportunity?: ProfitabilityOpportunity;
@@ -127,6 +132,8 @@ export function estimateOpportunityProfitability(
     buyBookAgeMs,
     sellBookAgeMs,
     freshness: buyBook.status === 'QUIET' || sellBook.status === 'QUIET' ? 'QUIET' : 'ACTIVE',
+    buyDepthUsed: finalBuy.fills,
+    sellDepthUsed: finalSell.fills,
     timestamp: now,
   } };
 }
@@ -141,23 +148,25 @@ export function profitabilityLimitsFromEnv(env: NodeJS.ProcessEnv): Profitabilit
 
 function walkBuy(levels: OrderBookState['asks'], target: number, maxNotional: number, maxDepth: number) {
   let quantity = 0, quote = 0;
+  const fills: DepthFill[] = [];
   for (const level of levels.slice(0, maxDepth)) {
     const byQuantity = Math.min(level.quantity, target - quantity);
     const take = Math.min(byQuantity, Math.max(0, (maxNotional - quote) / level.price));
-    if (take > 0) { quantity += take; quote += take * level.price; }
+    if (take > 0) { const quoteAmount = take * level.price; quantity += take; quote += quoteAmount; fills.push({ price: level.price, quantity: take, quoteAmount }); }
     if (quantity + 1e-12 >= target || take + 1e-12 < byQuantity) break;
   }
-  return { quantity, quote };
+  return { quantity, quote, fills };
 }
 
 function walkSell(levels: OrderBookState['bids'], target: number, maxDepth: number) {
   let quantity = 0, quote = 0;
+  const fills: DepthFill[] = [];
   for (const level of levels.slice(0, maxDepth)) {
     const take = Math.min(level.quantity, target - quantity);
-    if (take > 0) { quantity += take; quote += take * level.price; }
+    if (take > 0) { const quoteAmount = take * level.price; quantity += take; quote += quoteAmount; fills.push({ price: level.price, quantity: take, quoteAmount }); }
     if (quantity + 1e-12 >= target) break;
   }
-  return { quantity, quote };
+  return { quantity, quote, fills };
 }
 
 function isValidBook(book: OrderBookState, now: number, maxAge: number): boolean {
