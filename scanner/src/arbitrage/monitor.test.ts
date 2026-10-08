@@ -28,7 +28,11 @@ describe('event-driven arbitrage monitor', () => {
       bids: [{ price: 105, quantity: 1 }], asks: [{ price: 106, quantity: 1 }],
     });
     await new Promise((resolve) => setTimeout(resolve, 35));
-    expect(monitor.snapshot(now).opportunities[0]).toMatchObject({ buyExchange: 'binance', sellExchange: 'bybit' });
+    expect(monitor.snapshot(now).opportunities[0]).toMatchObject({
+      buyExchange: 'binance', sellExchange: 'bybit', referenceQuantity: 1, executableQuantity: 1,
+      bestBuyAsk: 100, bestSellBid: 105, freshness: 'ACTIVE', estimatedNetProfit: 5,
+    });
+    expect(monitor.snapshot(now).profitabilityEvaluations).toBe(1);
     const recalculations = monitor.snapshot(now).pairRecalculations;
     coordinator.markSequenceGap('bybit', 'BTCUSDT', 2, 3, 'synthetic sequence gap');
     await new Promise((resolve) => setTimeout(resolve, 35));

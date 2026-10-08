@@ -10,6 +10,7 @@ import { LiveExchangeSessions } from './live-sessions';
 import { MEXC_MAX_SUBSCRIPTIONS_PER_SOCKET } from './mexc-protocol';
 import { ArbitrageMonitor } from '../arbitrage/monitor';
 import { arbitrageConfigFromEnv, DEFAULT_ARBITRAGE_CONFIG } from '../arbitrage/config';
+import { profitabilityLimitsFromEnv, type ProfitabilityLimits } from '../arbitrage/profitability';
 import type { ArbitrageConfig } from '../arbitrage/detection';
 
 export type RuntimeOptions = {
@@ -19,6 +20,7 @@ export type RuntimeOptions = {
   depthLevels?: number;
   port: number;
   exchanges?: ExchangeId[];
+  profitability?: ProfitabilityLimits;
   requiredExchanges?: ExchangeId[];
   connectExchanges?: boolean;
   arbitrage?: ArbitrageConfig;
@@ -45,7 +47,8 @@ export class MarketDataRuntime {
   private constructor(universe: LiveUniverse, options: RuntimeOptions) {
     this.universe = universe;
     this.coordinator = new MarketDataCoordinator(universe.subscriptions, { depthLevels: options.depthLevels });
-    this.arbitrage = new ArbitrageMonitor(this.coordinator, universe.subscriptions, options.arbitrage ?? DEFAULT_ARBITRAGE_CONFIG);
+    this.arbitrage = new ArbitrageMonitor(this.coordinator, universe.subscriptions, options.arbitrage ?? DEFAULT_ARBITRAGE_CONFIG,
+      options.profitability);
     this.sessions = new LiveExchangeSessions(universe.subscriptions, this.coordinator);
     this.options = options;
     this.delay.enable();
@@ -235,6 +238,7 @@ export function runtimeOptionsFromEnv(env = process.env): RuntimeOptions {
   return { reportPath, maxPairs, ...(pairs?.length ? { pairs } : {}), depthLevels, port, exchanges,
     requiredExchanges,
     arbitrage: arbitrageConfigFromEnv(env),
+    profitability: profitabilityLimitsFromEnv(env),
     connectExchanges: (env.LIVE_MARKET_DATA ?? 'true').toLowerCase() !== 'false' };
 }
 

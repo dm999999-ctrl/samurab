@@ -16,6 +16,10 @@ describe('market-data runtime boundary', () => {
 
   it('rejects malformed limits rather than silently widening the rollout', () => {
     expect(() => runtimeOptionsFromEnv({ MAX_LIVE_PAIRS: '0' })).toThrow('MAX_LIVE_PAIRS');
+    expect(runtimeOptionsFromEnv({}).profitability).toEqual({ minimumEstimatedNetProfit: 0.01, maximumExecutableNotional: 10_000, maximumTotalSlippage: 0.005 });
+    expect(runtimeOptionsFromEnv({ ARBITRAGE_MIN_NET_PROFIT: '2', ARBITRAGE_MAX_NOTIONAL: '500', ARBITRAGE_MAX_SLIPPAGE: '0.01' }).profitability)
+      .toEqual({ minimumEstimatedNetProfit: 2, maximumExecutableNotional: 500, maximumTotalSlippage: 0.01 });
+    expect(() => runtimeOptionsFromEnv({ ARBITRAGE_MAX_SLIPPAGE: '-0.1' })).toThrow('ARBITRAGE_MAX_SLIPPAGE');
     expect(() => runtimeOptionsFromEnv({ MARKET_DATA_PORT: '4000' })).not.toThrow();
     expect(() => runtimeOptionsFromEnv({ MARKET_DATA_EXCHANGES: 'binance,unknown' })).toThrow('MARKET_DATA_EXCHANGES');
     expect(runtimeOptionsFromEnv({ MARKET_DATA_EXCHANGES: 'okx' }).exchanges).toEqual(['okx']);

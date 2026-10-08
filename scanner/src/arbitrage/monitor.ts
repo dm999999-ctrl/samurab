@@ -3,15 +3,19 @@ import type { MarketDataCoordinator } from '../market-data/coordinator';
 import type { LiveMarketSubscription } from '../market-data/universe';
 import type { OrderBookState } from '../market-data/types';
 import { detectArbitrageOpportunities, type ArbitrageConfig, type ArbitrageOpportunity } from './detection';
+import { DEFAULT_PROFITABILITY_LIMITS, estimateOpportunityProfitability, type ProfitabilityLimits, type ProfitabilityOpportunity } from './profitability';
 
-type CachedOpportunity = { opportunity: ArbitrageOpportunity; expiresAt: number };
+type CachedOpportunity = { opportunity: ProfitabilityOpportunity; expiresAt: number };
 
 export class ArbitrageMonitor {
   private readonly cache = new Map<string, CachedOpportunity>();
+  private profitabilityEvaluations = 0;
+  private readonly profitabilityRejections: Record<string, number> = {};
   private readonly subscriptionsByMarket = new Map<string, LiveMarketSubscription>();
   private readonly subscriptionsByPair = new Map<string, LiveMarketSubscription[]>();
   private readonly unsubscribe: () => void;
   private readonly config: ArbitrageConfig;
+  private readonly profitabilityLimits: ProfitabilityLimits;
   private bookChanges = 0;
   private pairRecalculations = 0;
   private usableBookInputs = 0;
@@ -24,7 +28,9 @@ export class ArbitrageMonitor {
     private readonly coordinator: MarketDataCoordinator,
     subscriptions: LiveMarketSubscription[],
     config: ArbitrageConfig,
+    profitabilityLimits: ProfitabilityLimits = DEFAULT_PROFITABILITY_LIMITS,
   ) {
+    this.profitabilityLimits = { ...profitabilityLimits };
     this.config = {
       ...config,
       feeRates: { ...config.feeRates },
@@ -54,6 +60,9 @@ export class ArbitrageMonitor {
       distinctUsableBooksConsumed: this.usableBooksSeen.size,
       bookChanges: this.bookChanges,
       pairRecalculations: this.pairRecalculations,
+      profitabilityEvaluations: this.profitabilityEvaluations,
+      profitabilityRejections: { ...this.profitabilityRejections },
+      profitabilityLimits: this.profitabilityLimits,
       qualifyingOpportunityCount: opportunities.length,
       opportunities,
     };
@@ -104,8 +113,16 @@ export class ArbitrageMonitor {
     const buyBook = books.find((book) => book.exchange === opportunity.buyExchange);
     const sellBook = books.find((book) => book.exchange === opportunity.sellExchange);
     if (!buyBook || !sellBook) { this.cache.delete(pair); return; }
+    this.profitabilityEvaluations += 1;
+    const estimate = estimateOpportunityProfitability(opportunity, buyBook, sellBook, this.config, this.profitabilityLimits, now);
+    if (!estimate.opportunity) {
+      const reason = estimate.rejectionReason ?? 'unknown';
+      this.profitabilityRejections[reason] = (this.profitabilityRejections[reason] ?? 0) + 1;
+      this.cache.delete(pair);
+      return;
+    }
     const expiresAt = Math.min(buyBook.receivedTimestamp, sellBook.receivedTimestamp) + (this.config.maxBookAgeMs ?? 60_000);
-    this.cache.set(pair, { opportunity, expiresAt });
+    this.cache.set(pair, { opportunity: estimate.opportunity, expiresAt });
   }
 }
 function marketKey(exchange: ExchangeId, symbol: string): string {
